@@ -1,5 +1,5 @@
-# convert Didi txt annotations to xml
-from xml.dom.minidom import Document
+# statistics of bboxes in detection task
+# w, h, aspect_ratio, ox, oy
 
 import matplotlib as mpl
 mpl.use('Agg')
@@ -7,9 +7,6 @@ import matplotlib.pyplot as plt
 import cv2
 import os
 import pdb
-
-caffe_root = '/home/work/wwl/code/caffe-ssd'
-os.chdir(os.path.join(caffe_root, 'data/didi'))
 
 def count(split_lines, img_size, class_ind, total):
     width = img_size[1]
