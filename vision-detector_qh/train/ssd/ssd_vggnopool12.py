@@ -1,0 +1,569 @@
+from __future__ import print_function
+#!/usr/bin/env python
+# coding=utf-8
+""" SSD """
+
+import os, sys, math
+import caffe
+from caffe import layers as L
+from caffe import params as P 
+from caffe.proto import caffe_pb2 
+import caffe.model_libs as ML
+Params = {
+        'model_name': '',    
+        'train_lmdb': '',
+        'test_lmdb': '',
+        'label_map_file': '',
+        'name_size_file': '',
+        'output_result_dir': '',
+        'resize_height': 0,
+        'resize_width': 0,
+        'batch_size_per_device': 64,
+        'test_batch_size': 8,
+        'freeze_layers': [],                    # Which layers to freeze (no backward) during training.
+        'use_batchnorm': False,                 # If true, use batch norm for all newly added layers.
+        'num_classes': 4,
+        'background_label_id': 0,
+        'neg_pos_ratio': 3.0,
+        'num_test_image': 0,
+}
+
+batch_sampler = []
+train_transform_param = {}
+test_transform_param = {}
+multibox_param = {}
+multibox_loss_param = {}
+loss_param = {}
+det_out_param = {}
+det_eval_param = {}
+
+def get_params():
+    global batch_sampler 
+    global train_transform_param
+    global test_transform_param
+    global multibox_param
+    global multibox_loss_param
+    global loss_param 
+    global det_out_param 
+    global det_eval_param 
+
+    batch_sampler = [
+            {
+                    'sampler': {
+                            },
+                    'max_trials': 1,
+                    'max_sample': 1,
+                    'xmin': 0.35,
+                    'ymin': 0.3,
+                    'xmax': 0.7,
+                    'ymax': 0.65,
+            },
+            #{
+            #        'sampler': {
+            #                'min_scale': 0.3,
+            #                'max_scale': 1.0,
+            #                'min_aspect_ratio': 0.5,
+            #                'max_aspect_ratio': 2.0,
+            #                },
+            #        'sample_constraint': {
+            #                'min_jaccard_overlap': 0.7,
+            #                },
+            #        'max_trials': 50,
+            #        'max_sample': 1,
+            #        'xmin': 0.35,
+            #        'ymin': 0.3,
+            #        'xmax': 0.7,
+            #        'ymax': 0.65,
+            #},
+            #{
+            #        'sampler': {
+            #                'min_scale': 0.3,
+            #                'max_scale': 1.0,
+            #                'min_aspect_ratio': 0.5,
+            #                'max_aspect_ratio': 2.0,
+            #                },
+            #        'sample_constraint': {
+            #                'min_jaccard_overlap': 0.8,
+            #                },
+            #        'max_trials': 50,
+            #        'max_sample': 1,
+            #        'xmin': 0.35,
+            #        'ymin': 0.3,
+            #        'xmax': 0.7,
+            #        'ymax': 0.65,
+            #},
+            #{
+            #        'sampler': {
+            #                'min_scale': 0.3,
+            #                'max_scale': 1.0,
+            #                'min_aspect_ratio': 0.5,
+            #                'max_aspect_ratio': 2.0,
+            #                },
+            #        'sample_constraint': {
+            #                'min_jaccard_overlap': 0.9,
+            #                },
+            #        'max_trials': 50,
+            #        'max_sample': 1,
+            #        'xmin': 0.35,
+            #        'ymin': 0.3,
+            #        'xmax': 0.7,
+            #        'ymax': 0.65,
+            #},
+            #{
+            #        'sampler': {
+            #                'min_scale': 0.3,
+            #                'max_scale': 1.0,
+            #                'min_aspect_ratio': 0.5,
+            #                'max_aspect_ratio': 2.0,
+            #                },
+            #        'sample_constraint': {
+            #                'max_jaccard_overlap': 1.0,
+            #                },
+            #        'max_trials': 50,
+            #        'max_sample': 1,
+            #        'xmin': 0.35,
+            #        'ymin': 0.3,
+            #        'xmax': 0.7,
+            #        'ymax': 0.65,
+            #},
+            ]
+    train_transform_param = {
+            'mirror': True,
+            'mean_value': [114, 115, 108],
+            'resize_param': {
+                    'prob': 1,
+                    'resize_mode': P.Resize.WARP,
+                    'height': Params['resize_height'],
+                    'width': Params['resize_width'],
+                    'interp_mode': [
+                            P.Resize.LINEAR,
+                            P.Resize.AREA,
+                            P.Resize.NEAREST,
+                            P.Resize.CUBIC,
+                            P.Resize.LANCZOS4,
+                            ],
+                    },
+            'emit_constraint': {
+                'emit_type': caffe_pb2.EmitConstraint.CENTER,
+                }
+            }
+    test_transform_param = {
+            'mean_value': [114, 115, 108],
+            'resize_param': {
+                    'prob': 1,
+                    'resize_mode': P.Resize.WARP,
+                    'height': Params['resize_height'],
+                    'width': Params['resize_width'],
+                    'interp_mode': [P.Resize.LINEAR],
+                    },
+            }
+    # MultiBoxLoss parameters.
+    multibox_param = {
+        'loc_weight': (Params['neg_pos_ratio'] + 1.) / 4.,
+        'num_classes': Params['num_classes'],
+        'share_location': True,
+        'flip': True, 
+        'clip': True, 
+        'code_type': P.PriorBox.CENTER_SIZE,
+        'background_label_id': Params['background_label_id'],
+        'name_size_file': Params['name_size_file'],
+        'output_directory': Params['output_result_dir'],
+            }
+    multibox_loss_param = {
+        'loc_loss_type': P.MultiBoxLoss.SMOOTH_L1,
+        'conf_loss_type': P.MultiBoxLoss.SOFTMAX,
+        'loc_weight': multibox_param['loc_weight'],
+        'num_classes': multibox_param['num_classes'],
+        'share_location': multibox_param['share_location'],
+        'match_type': P.MultiBoxLoss.PER_PREDICTION,
+        'overlap_threshold': 0.3,
+        'use_prior_for_matching': True,
+        'background_label_id': multibox_param['background_label_id'],
+        'use_difficult_gt': True,
+        'mining_type': P.MultiBoxLoss.MAX_NEGATIVE,
+        'neg_pos_ratio': Params['neg_pos_ratio'],
+        'neg_overlap': 0.3,
+        'code_type': multibox_param['code_type'],
+        }
+    loss_param = {
+        'normalization': P.Loss.VALID,
+        }
+
+    # parameters for generating detection output.
+    det_out_param = {
+        'num_classes': multibox_param['num_classes'],
+        'share_location': multibox_param['share_location'],
+        'background_label_id': multibox_param['background_label_id'],
+        'nms_param': {'nms_threshold': 0.3, 'top_k': 200},
+        'save_output_param': {
+            'output_directory': multibox_param['output_directory'],
+            'output_name_prefix': "det_test_",
+            'output_format': "VOC",
+            'label_map_file': Params['label_map_file'],
+            'name_size_file': multibox_param['name_size_file'],
+            'num_test_image': Params['num_test_image'],
+            },
+        'keep_top_k': 100,
+        'confidence_threshold': 0.01,
+        'code_type': multibox_param['code_type'],
+        }
+
+    # parameters for evaluating detection results.
+    det_eval_param = {
+        'num_classes': multibox_param['num_classes'],
+        'background_label_id': multibox_param['background_label_id'],
+        'overlap_threshold': 0.5,
+        'evaluate_difficult_gt': False,
+        'name_size_file': multibox_param['name_size_file'],
+        }
+
+def get_baselr():
+    # Use different initial learning rate.
+    if Params['use_batchnorm']:
+        base_lr = 0.000001
+    else:
+        # A learning rate for batch_size = 1, num_gpus = 1.
+        base_lr = 0.00005
+
+    if loss_param['normalization'] == P.Loss.NONE:
+        base_lr /= Params['batch_size_per_device']
+    elif loss_param['normalization'] == P.Loss.VALID:
+        base_lr *= 10. / multibox_param['loc_weight'] 
+    elif loss_param['normalization'] == P.Loss.FULL:
+        # Roughly there are 2000 prior bboxes per image.
+        # TODO(weiliu89): Estimate the exact # of priors.
+        base_lr *= 2000.
+    return base_lr
+
+def get_testiter():
+    return Params['num_test_image'] / Params['test_batch_size'] 
+
+def CreateAnnotatedDataLayer(source, batch_size=32, backend=P.Data.LMDB,
+        output_label=True, train=True, label_map_file='', anno_type=None,
+        transform_param={}, batch_sampler=[{}]):
+    if train:
+        kwargs = {
+                'include': dict(phase=caffe_pb2.Phase.Value('TRAIN')),
+                'transform_param': transform_param,
+                }
+    else:
+        kwargs = {
+                'include': dict(phase=caffe_pb2.Phase.Value('TEST')),
+                'transform_param': transform_param,
+                }
+    ntop = 1
+    if output_label:
+        ntop = 2
+    annotated_data_param = {
+        'label_map_file': label_map_file,
+        'batch_sampler': batch_sampler,
+        }
+    if anno_type is not None:
+        annotated_data_param.update({'anno_type': anno_type})
+    return L.AnnotatedData(annotated_data_param=annotated_data_param,
+        data_param=dict(batch_size=batch_size, backend=backend, source=source),
+        ntop=ntop, **kwargs)
+
+
+def VGGNetBody(net, from_layer, need_fc=True, fully_conv=False, reduced=False,
+        dilated=False, nopool=False, dropout=True, freeze_layers=[], dilate_pool4=False,
+        reduce_r=1):
+    kwargs = {
+            'param': [dict(lr_mult=1, decay_mult=1), dict(lr_mult=2, decay_mult=0)],
+            'weight_filler': dict(type='xavier'),
+            'bias_filler': dict(type='constant', value=0)}
+
+    assert from_layer in net.keys()
+
+    base_nout=64/reduce_r
+    net.conv1_1 = L.Convolution(net[from_layer], num_output=base_nout, pad=1, kernel_size=3, **kwargs)
+
+    net.relu1_1 = L.ReLU(net.conv1_1, in_place=True)
+
+    if nopool:
+        name = 'conv1_2'
+        net[name] = L.Convolution(net.relu1_1, num_output=base_nout, pad=1, kernel_size=3, stride=2, **kwargs)
+        net.relu1_2 = L.ReLU(net.conv1_2, in_place=True)
+    else:
+        net.conv1_2 = L.Convolution(net.relu1_1, num_output=base_nout, pad=1, kernel_size=3, **kwargs)
+        net.relu1_2 = L.ReLU(net.conv1_2, in_place=True)
+        name = 'pool1'
+        net.pool1 = L.Pooling(net.relu1_2, pool=P.Pooling.MAX, kernel_size=2, stride=2)
+
+    net.conv2_1 = L.Convolution(net[name], num_output=base_nout*2, pad=1, kernel_size=3, **kwargs)
+    net.relu2_1 = L.ReLU(net.conv2_1, in_place=True)
+
+    if nopool:
+        name = 'conv2_2'
+        net[name] = L.Convolution(net.relu2_1, num_output=base_nout*2, pad=1, kernel_size=3, stride=2, **kwargs)
+        net.relu2_2 = L.ReLU(net.conv2_2, in_place=True)
+    else:
+        net.conv2_2 = L.Convolution(net.relu2_1, num_output=base_nout*2, pad=1, kernel_size=3, **kwargs)
+        net.relu2_2 = L.ReLU(net.conv2_2, in_place=True)
+        name = 'pool2'
+        net[name] = L.Pooling(net.relu2_2, pool=P.Pooling.MAX, kernel_size=2, stride=2)
+
+    net.conv3_1 = L.Convolution(net[name], num_output=base_nout*4, pad=1, kernel_size=3, **kwargs)
+    net.relu3_1 = L.ReLU(net.conv3_1, in_place=True)
+    net.conv3_2 = L.Convolution(net.relu3_1, num_output=base_nout*4, pad=1, kernel_size=3, **kwargs)
+    net.relu3_2 = L.ReLU(net.conv3_2, in_place=True)
+    net.conv3_3 = L.Convolution(net.relu3_2, num_output=base_nout*4, pad=1, kernel_size=3, **kwargs)
+    net.relu3_3 = L.ReLU(net.conv3_3, in_place=True)
+
+    name = 'pool3'
+    net[name] = L.Pooling(net.relu3_3, pool=P.Pooling.MAX, kernel_size=2, stride=2)
+
+    net.conv4_1 = L.Convolution(net[name], num_output=base_nout*8, pad=1, kernel_size=3, **kwargs)
+    net.relu4_1 = L.ReLU(net.conv4_1, in_place=True)
+    net.conv4_2 = L.Convolution(net.relu4_1, num_output=base_nout*8, pad=1, kernel_size=3, **kwargs)
+    net.relu4_2 = L.ReLU(net.conv4_2, in_place=True)
+    net.conv4_3 = L.Convolution(net.relu4_2, num_output=base_nout*8, pad=1, kernel_size=3, **kwargs)
+    net.relu4_3 = L.ReLU(net.conv4_3, in_place=True)
+
+    name = 'pool4'
+    if dilate_pool4:
+        net[name] = L.Pooling(net.relu4_3, pool=P.Pooling.MAX, kernel_size=3, stride=1, pad=1)
+        dilation = 2
+    else:
+        net[name] = L.Pooling(net.relu4_3, pool=P.Pooling.MAX, kernel_size=2, stride=2)
+        dilation = 1
+
+    kernel_size = 3
+    pad = int((kernel_size + (dilation - 1) * (kernel_size - 1)) - 1) / 2
+    net.conv5_1 = L.Convolution(net[name], num_output=base_nout*8, pad=pad, kernel_size=kernel_size, dilation=dilation, **kwargs)
+    net.relu5_1 = L.ReLU(net.conv5_1, in_place=True)
+    net.conv5_2 = L.Convolution(net.relu5_1, num_output=base_nout*8, pad=pad, kernel_size=kernel_size, dilation=dilation, **kwargs)
+    net.relu5_2 = L.ReLU(net.conv5_2, in_place=True)
+    net.conv5_3 = L.Convolution(net.relu5_2, num_output=base_nout*8, pad=pad, kernel_size=kernel_size, dilation=dilation, **kwargs)
+    net.relu5_3 = L.ReLU(net.conv5_3, in_place=True)
+
+    if need_fc:
+        if dilated:
+            name = 'pool5'
+            net[name] = L.Pooling(net.relu5_3, pool=P.Pooling.MAX, pad=1, kernel_size=3, stride=1)
+        else:
+            name = 'pool5'
+            net[name] = L.Pooling(net.relu5_3, pool=P.Pooling.MAX, kernel_size=2, stride=2)
+
+        if fully_conv:
+            if dilated:
+                if reduced:
+                    dilation = dilation * 6
+                    kernel_size = 3
+                    num_output = base_nout*16
+                else:
+                    dilation = dilation * 2
+                    kernel_size = 7
+                    num_output = base_nout*64
+            else:
+                if reduced:
+                    dilation = dilation * 3
+                    kernel_size = 3
+                    num_output = base_nout*16
+                else:
+                    kernel_size = 7
+                    num_output = base_nout*64
+            pad = int((kernel_size + (dilation - 1) * (kernel_size - 1)) - 1) / 2
+            net.fc6_conv = L.Convolution(net[name], num_output=num_output, pad=pad, kernel_size=kernel_size, dilation=dilation, **kwargs)
+
+            net.relu6 = L.ReLU(net.fc6_conv, in_place=True)
+            if dropout:
+                net.drop6 = L.Dropout(net.relu6, dropout_ratio=0.5, in_place=True)
+
+            if reduced:
+                net.fc7_conv = L.Convolution(net.relu6, num_output=base_nout*16, kernel_size=1, **kwargs)
+            else:
+                net.fc7_conv = L.Convolution(net.relu6, num_output=base_nout*64, kernel_size=1, **kwargs)
+            net.relu7 = L.ReLU(net.fc7_conv, in_place=True)
+            if dropout:
+                net.drop7 = L.Dropout(net.relu7, dropout_ratio=0.5, in_place=True)
+        else:
+            net.fc6 = L.InnerProduct(net.pool5, num_output=base_nout*64)
+            net.relu6 = L.ReLU(net.fc6, in_place=True)
+            if dropout:
+                net.drop6 = L.Dropout(net.relu6, dropout_ratio=0.5, in_place=True)
+            net.fc7 = L.InnerProduct(net.relu6, num_output=base_nout*64)
+            net.relu7 = L.ReLU(net.fc7, in_place=True)
+            if dropout:
+                net.drop7 = L.Dropout(net.relu7, dropout_ratio=0.5, in_place=True)
+
+    # Update freeze layers.
+    kwargs['param'] = [dict(lr_mult=0, decay_mult=0), dict(lr_mult=0, decay_mult=0)]
+    layers = net.keys()
+    for freeze_layer in freeze_layers:
+        if freeze_layer in layers:
+            net.update(freeze_layer, kwargs)
+
+    return net
+
+# Create inputs layers
+def create_inputs(net, phase):
+    global batch_sampler
+    if phase == 'train':
+        lmdb_file = Params['train_lmdb']
+        transform_param = train_transform_param
+        batch_size = Params['batch_size_per_device']
+    else:
+        lmdb_file = Params['test_lmdb']
+        transform_param = test_transform_param
+        batch_size = Params['test_batch_size']
+        batch_sampler = [{}] 
+
+    label_map_file=Params['label_map_file']
+
+    #check_if_exist(lmdb_file)
+    #check_if_exist(label_map_file)
+
+    return CreateAnnotatedDataLayer(
+        lmdb_file,
+        batch_size=batch_size,
+        train=(phase=='train'),
+        output_label=True,
+        label_map_file=label_map_file,
+        transform_param=transform_param,
+        batch_sampler=batch_sampler)
+
+def create_body_net(net, from_layer):
+    freeze_layers = Params['freeze_layers']
+    VGGNetBody(net, from_layer=from_layer, fully_conv=True, reduced=True,
+        dilated=True, dropout=False, freeze_layers=freeze_layers,
+        reduce_r=4, nopool=True)
+
+    use_batchnorm = Params['use_batchnorm']
+    use_relu = True
+    from_layer = net.keys()[-1]
+
+    # Add additional convolutional layers.
+    out_layer = "conv6_1"
+    ML.ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, 32, 1, 0, 1)  # 256
+
+    from_layer = out_layer
+    out_layer = "conv6_2"
+    ML.ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, 64, 3, 1, 2)  # 512
+
+    for i in xrange(7, 8):
+      from_layer = out_layer
+      out_layer = "conv{}_1".format(i)
+      ML.ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, 16, 1, 0, 1)  # 128
+
+      from_layer = out_layer
+      out_layer = "conv{}_2".format(i)
+      ML.ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, 32, 3, 1, 2)  # 256
+
+    # Add global pooling layer.
+    #name = net.keys()[-1]
+    #net.pool6 = L.Pooling(net[name], pool=P.Pooling.AVE, global_pooling=True)
+    # Return mbox_source_layers  
+    return ['conv4_3', 'fc7_conv', 'conv6_2', 'conv7_2'] # 'conv8_2', 'pool6']
+
+def create_multibox_layers(net, mbox_source_layers):
+    # multibox setting
+    use_batchnorm = Params['use_batchnorm']
+    num_classes = Params['num_classes']
+    min_ratio = 10
+    max_ratio = 95
+    min_dim = int(math.sqrt(Params['resize_height'] * Params['resize_width']))
+    step = int(math.floor((max_ratio - min_ratio) / (len(mbox_source_layers) - 2)))
+    step = 21
+    min_sizes = []
+    max_sizes = []
+    for ratio in xrange(min_ratio, max_ratio + 1, step):
+        min_sizes.append(min_dim * ratio / 100.)
+        max_sizes.append(min_dim * (ratio + step) / 100.)
+    print (step)
+    print (min_sizes)
+    print (max_sizes)
+    min_sizes = [min_dim * 3 / 100.] + min_sizes
+    max_sizes = [min_dim * 10 / 100.] + max_sizes
+    print (min_sizes)
+    print (max_sizes)
+    exit()
+    aspect_ratios = [[2, 3], [2, 3], [2, 3], [2, 3]]
+    normalizations = [20, -1, -1, -1]
+
+    share_location = multibox_param['share_location']
+    flip = multibox_param['flip']
+    clip = multibox_param['clip']
+    code_type = multibox_param['code_type']
+    # variance used to encode/decode prior bboxes.
+    if code_type == P.PriorBox.CENTER_SIZE:
+        prior_variance = [0.1, 0.1, 0.2, 0.2]
+    else:
+        prior_variance = [0.1]
+
+    # create multi-box layers
+    mbox_layers = ML.CreateMultiBoxHead(
+        net,
+        data_layer='data',
+        from_layers=mbox_source_layers,
+        use_batchnorm=use_batchnorm,
+        min_sizes=min_sizes,
+        max_sizes=max_sizes,
+        aspect_ratios=aspect_ratios,
+        normalizations=normalizations,
+        num_classes=num_classes,
+        share_location=share_location,
+        flip=flip,
+        clip=clip,
+        prior_variance=prior_variance,
+        kernel_size=3,
+        pad=1)
+
+    return mbox_layers
+
+def create_multibox_loss(net, mbox_layers):
+    net.mbox_loss = L.MultiBoxLoss(*mbox_layers, 
+            multibox_loss_param=multibox_loss_param,
+            loss_param=loss_param, 
+            include=dict(phase=caffe_pb2.Phase.Value('TRAIN')),
+            propagate_down=[True, True, False, False])
+
+def create_multibox_outputs(net, mbox_layers):
+    conf_name = "mbox_conf"
+    if multibox_loss_param["conf_loss_type"] == P.MultiBoxLoss.SOFTMAX:
+        reshape_name = "{}_reshape".format(conf_name)
+        net[reshape_name] = L.Reshape(net[conf_name], 
+            shape=dict(dim=[0, -1, multibox_loss_param['num_classes']]))
+        softmax_name = "{}_softmax".format(conf_name)
+        net[softmax_name] = L.Softmax(net[reshape_name], axis=2)
+        flatten_name = "{}_flatten".format(conf_name)
+        net[flatten_name] = L.Flatten(net[softmax_name], axis=1)
+        mbox_layers[1] = net[flatten_name]
+    elif multibox_loss_param["conf_loss_type"] == P.MultiBoxLoss.LOGISTIC:
+        sigmoid_name = "{}_sigmoid".format(conf_name)
+        net[sigmoid_name] = L.Sigmoid(net[conf_name])
+        mbox_layers[1] = net[sigmoid_name]
+
+    net.detection_out = L.DetectionOutput(*mbox_layers,
+        detection_output_param=det_out_param,
+        include=dict(phase=caffe_pb2.Phase.Value('TEST')))
+    net.detection_eval = L.DetectionEvaluate(net.detection_out, net.label,
+        detection_evaluate_param=det_eval_param,
+        include=dict(phase=caffe_pb2.Phase.Value('TEST')))
+
+def create_net(phase): 
+    get_params()
+    net = caffe.NetSpec()
+    net.data, net.label = create_inputs(net, phase)
+    mbox_source_layers = create_body_net(net, from_layer='data')
+    mbox_layers = create_multibox_layers(net, mbox_source_layers)
+    if phase == 'train':
+        mbox_layers.append(net.label)
+        create_multibox_loss(net, mbox_layers)
+    else:
+        create_multibox_outputs(net, mbox_layers)
+    
+    net_proto = net.to_proto()
+    if phase == 'deploy':
+        del net_proto.layer[0]
+        del net_proto.layer[-1]
+        net_proto.input.extend(['data'])
+        net_proto.input_shape.extend([caffe_pb2.BlobShape(
+            dim=[1, 3, Params['resize_height'], Params['resize_width']])])
+    net_proto.name = '{}_{}'.format(Params['model_name'], phase)
+    return net_proto
+
+if __name__ == '__main__':
+    for phase in ['train', 'test', 'deploy']:
+        with open('/tmp/{}.prototxt'.format(phase), 'w') as f:
+            print(create_net(phase), file=f)
