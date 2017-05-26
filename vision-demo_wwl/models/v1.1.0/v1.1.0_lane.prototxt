@@ -1,0 +1,170 @@
+name: "RegressionSlc"
+input: "data"
+input_shape {
+  dim: 1
+  dim: 3
+  dim: 16
+  dim: 128
+}
+layer {
+    name: "conv1_1"
+    type: "Convolution"
+    bottom: "data"
+    top: "conv1_1"
+    param {
+        lr_mult: 0
+        decay_mult:0
+    }
+    param {
+        lr_mult: 0
+        decay_mult: 0
+    }
+    convolution_param {
+        num_output: 16
+        pad: 1
+        kernel_size: 3
+        weight_filler {
+            type: "xavier"
+        }
+        bias_filler {
+            type: "constant"
+            value: 0
+        }
+    }
+}
+layer {
+    name: "relu1_1"
+    type: "ReLU"
+    bottom: "conv1_1"
+    top: "conv1_1"
+}
+layer {
+    name: "conv2_1"
+    type: "Convolution"
+    bottom: "conv1_1"
+    top: "conv2_1"
+    param {
+        lr_mult: 0
+        decay_mult: 0
+    }
+    param {
+        lr_mult: 0
+        decay_mult: 0
+    }
+    convolution_param {
+        num_output: 8
+        pad: 1
+        kernel_size: 3
+        weight_filler {
+            type: "xavier"
+        }
+        bias_filler {
+            type: "constant"
+            value: 0
+        }
+    }
+}
+layer {
+    name: "relu2_1"
+    type: "ReLU"
+    bottom: "conv2_1"
+    top: "conv2_1"
+}
+layer {
+    name: "conv3"
+    type: "Convolution"
+    bottom: "conv2_1"
+    top: "conv3"
+    param {
+        lr_mult: 1
+        decay_mult: 1
+    }
+    param {
+        lr_mult: 2
+        decay_mult: 0
+    }
+    convolution_param {
+        num_output: 1
+        pad: 1
+        kernel_size: 3
+        weight_filler {
+            type: "xavier"
+        }
+        bias_filler {
+            type: "constant"
+            value: 0
+        }
+    }
+}
+layer {
+    name: "conv4_1"
+    type: "Convolution"
+    bottom: "conv3"
+    top: "conv4_1"
+    param {
+        lr_mult: 1
+        decay_mult: 1
+    }
+    param {
+        lr_mult: 2
+        decay_mult: 0
+    }
+    convolution_param {
+        num_output: 8
+        pad_w: 3
+        pad_h: 3
+        kernel_w: 7
+        kernel_h: 7
+        stride_w: 1
+        stride_h: 3
+        weight_filler {
+            type: "xavier"
+        }
+        bias_filler {
+            type: "constant"
+            value: 0
+        }
+    }
+}
+layer {
+    name: "relu4_1"
+    type: "ReLU"
+    bottom: "conv4_1"
+    top: "conv4_1"
+}
+layer {
+    name: "conv4"
+    type: "Convolution"
+    bottom: "conv4_1"
+    top: "conv4"
+    param {
+        lr_mult: 1
+        decay_mult: 1
+    }
+    param {
+        lr_mult: 2
+        decay_mult: 0
+    }
+    convolution_param {
+        num_output: 1
+        pad_w: 3
+        pad_h: 0
+        kernel_w: 7
+        kernel_h: 6
+        stride_w: 1
+        stride_h: 1
+        weight_filler {
+            type: "xavier"
+        }
+        bias_filler {
+            type: "constant"
+            value: 0
+        }
+    }
+}
+layer {
+    name:"Sigmoid"
+    type:"Sigmoid"
+    bottom:"conv4"
+    top:"output"
+}
